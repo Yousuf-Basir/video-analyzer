@@ -7,9 +7,10 @@ import { Input } from "@/components/ui/input"
 type JobState = {
   id: string
   url: string
-  status: "pending" | "downloading" | "completed" | "error"
+  status: "pending" | "downloading" | "converting" | "completed" | "error"
   progress: number
   videoUrl?: string
+  audioUrl?: string
   thumbnailUrl?: string
 }
 
@@ -20,7 +21,7 @@ export default function Page() {
 
   useEffect(() => {
     let interval: NodeJS.Timeout
-    if (job && (job.status === "pending" || job.status === "downloading")) {
+    if (job && (job.status === "pending" || job.status === "downloading" || job.status === "converting")) {
       interval = setInterval(async () => {
         const res = await fetch(`/api/jobs/${job.id}`)
         if (res.ok) {
@@ -90,10 +91,10 @@ export default function Page() {
         )}
 
         {/* Downloading UI */}
-        {job && (job.status === "pending" || job.status === "downloading") && (
+        {job && job.status === "downloading" && (
           <div className="flex flex-col gap-4 text-center">
             <h2 className="text-lg font-semibold animate-pulse">
-              Downloading...
+              Downloading Original Video...
             </h2>
             <div className="flex items-center gap-4">
               <div className="h-3 w-full bg-secondary overflow-hidden rounded-full">
@@ -109,6 +110,27 @@ export default function Page() {
           </div>
         )}
 
+        {/* Converting UI */}
+        {job && job.status === "converting" && (
+          <div className="flex flex-col gap-4 text-center">
+            <h2 className="text-lg font-semibold animate-pulse text-primary">
+              Extracting Audio...
+            </h2>
+            <div className="flex items-center gap-4">
+              <div className="h-3 w-full bg-secondary overflow-hidden rounded-full">
+                <div
+                  className="h-full bg-primary transition-all duration-700 ease-out"
+                  style={{ width: `${job.progress}%` }}
+                />
+              </div>
+              <span className="text-sm font-medium w-12 text-right">
+                {job.progress}%
+              </span>
+            </div>
+            <p className="text-xs text-muted-foreground">Running fluent-ffmpeg</p>
+          </div>
+        )}
+
         {/* Player UI */}
         {job && job.status === "completed" && job.videoUrl && (
           <div className="flex flex-col gap-6 animate-in fade-in zoom-in duration-500">
@@ -120,8 +142,14 @@ export default function Page() {
                 className="w-full aspect-video object-cover"
               />
             </div>
+            {job.audioUrl && (
+              <div className="flex flex-col gap-2 p-4 rounded-xl border bg-card/50 shadow-sm text-center">
+                <span className="text-sm font-semibold">Extracted Web Audio</span>
+                <audio controls src={job.audioUrl} className="w-full" />
+              </div>
+            )}
             <Button onClick={handleNext} variant="secondary" className="w-full">
-              Next Video
+              Analyze Next Video
             </Button>
           </div>
         )}
@@ -130,7 +158,7 @@ export default function Page() {
         {job && job.status === "error" && (
           <div className="flex flex-col gap-4 text-center">
             <div className="text-destructive font-semibold">
-              An error occurred during download.
+              An error occurred during processing.
             </div>
             <Button onClick={handleNext} variant="outline" className="w-full">
               Try Again
