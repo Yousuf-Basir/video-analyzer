@@ -3,7 +3,7 @@ import path from "path"
 
 const dbPath = path.resolve(process.cwd(), "jobs.json")
 
-export type JobStatus = "pending" | "downloading" | "converting" | "completed" | "error"
+export type JobStatus = "pending" | "downloading" | "converting" | "transcribing" | "completed" | "error"
 
 export interface Job {
     id: string
@@ -13,6 +13,7 @@ export interface Job {
     videoUrl?: string
     audioUrl?: string
     thumbnailUrl?: string
+    transcription?: any
 }
 
 export function getJobs(): Record<string, Job> {

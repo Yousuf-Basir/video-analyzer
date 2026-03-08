@@ -4,6 +4,11 @@ import fs from "fs"
 import path from "path"
 import ffmpeg from "fluent-ffmpeg"
 import ffmpegInstaller from "@ffmpeg-installer/ffmpeg"
+import { env, pipeline } from "@xenova/transformers"
+import { WaveFile } from "wavefile"
+
+// Set Hugging Face cache config to work exclusively in Node.js instead of browser mode
+env.useBrowserCache = false;
 
 // Link fluent-ffmpeg to the static binary
 ffmpeg.setFfmpegPath(ffmpegInstaller.path)
@@ -72,14 +77,19 @@ export const downloadQueue = Queue(
                     }
                 }
 
-                fileStream.end()
+                await new Promise((resolve, reject) => {
+                    fileStream.on('finish', resolve)
+                    fileStream.on('error', reject)
+                    fileStream.end()
+                })
+                updateJob(id, { progress: 100, status: "downloading" })
             } else {
                 throw new Error("No response body available to stream")
             }
 
             // --- Conversion Step ---
             updateJob(id, { status: "converting", progress: 0 })
-            const audioFileName = `${id}.mp3`
+            const audioFileName = `${id}.wav`
             const audioFilePath = path.join(downloadsDir, audioFileName)
 
             await new Promise((resolve, reject) => {
@@ -89,7 +99,9 @@ export const downloadQueue = Queue(
                 ffmpeg(filePath)
                     .output(audioFilePath)
                     .noVideo()
-                    .audioCodec('libmp3lame')
+                    .audioCodec('pcm_s16le')
+                    .audioFrequency(16000)
+                    .audioChannels(1)
                     .on('codecData', (data) => {
                         // Extract duration from codecData if available (format: HH:MM:SS.ms)
                         if (data.duration) {
@@ -118,7 +130,12 @@ export const downloadQueue = Queue(
                             }
                         }
 
-                        if (currentPercent && currentPercent > lastReportedProgress + 1) {
+                        // Super-fallback: if we STILL have no percent, at least fake some progress so UI isn't stuck at 0%
+                        if (!currentPercent) {
+                            currentPercent = Math.min(lastReportedProgress + 5, 95)
+                        }
+
+                        if (currentPercent && currentPercent > lastReportedProgress) {
                             updateJob(id, {
                                 status: "converting",
                                 progress: Math.min(Math.round(currentPercent), 100)
@@ -127,6 +144,7 @@ export const downloadQueue = Queue(
                         }
                     })
                     .on('end', () => {
+                        updateJob(id, { status: "converting", progress: 100 })
                         resolve(true)
                     })
                     .on('error', (err) => {
@@ -136,12 +154,82 @@ export const downloadQueue = Queue(
                     .run()
             })
 
-            // Finalize with the locally downloaded video and audio URLs
+            // --- Transcribing Step ---
+            updateJob(id, { status: "transcribing", progress: 0 })
+
+            // Read the WAV file and convert to Float32Array for Whisper natively
+            const wavBuffer = fs.readFileSync(audioFilePath)
+            const wav = new WaveFile(wavBuffer)
+            wav.toBitDepth('32f')
+            wav.toSampleRate(16000)
+
+            let rawSamples = wav.getSamples()
+            let audioData: Float32Array
+            if (Array.isArray(rawSamples)) {
+                if (rawSamples.length > 0) {
+                    audioData = new Float32Array(rawSamples[0]) // take the first channel
+                } else {
+                    audioData = new Float32Array(0)
+                }
+            } else {
+                audioData = new Float32Array(rawSamples)
+            }
+
+            // A singleton pipeline to download/cache the model locally on first run
+            let filesProgress: Record<string, number> = {}
+            let maxTranscribingProgress = 0
+
+            const transcriber = await pipeline('automatic-speech-recognition', 'Xenova/whisper-tiny.en', {
+                progress_callback: (data: any) => {
+                    if (data.status === 'progress' && data.name) {
+                        filesProgress[data.name] = data.progress
+
+                        const values = Object.values(filesProgress)
+                        const avg = values.reduce((a, b) => a + b, 0) / values.length
+                        const calculatedProgress = Math.min(Math.round(avg * 0.5), 50)
+
+                        if (calculatedProgress > maxTranscribingProgress) {
+                            maxTranscribingProgress = calculatedProgress
+                            updateJob(id, {
+                                status: "transcribing",
+                                progress: maxTranscribingProgress
+                            })
+                        }
+                    }
+                }
+            })
+
+            // Run the transformer inference using the CPU
+            updateJob(id, { status: "transcribing", progress: 50 })
+
+            // Setup a faked progress ticker for the inference phase (50 -> 99%)
+            let inferenceProgress = 50
+            const inferenceTicker = setInterval(() => {
+                if (inferenceProgress < 99) {
+                    inferenceProgress += 1
+                    updateJob(id, { status: "transcribing", progress: inferenceProgress })
+                }
+            }, 1000) // tick 1% every second during heavy compute
+
+            let result: any;
+            try {
+                // Pass configuration options to process long audio perfectly and extract sentence timestamps
+                result = await transcriber(audioData, {
+                    chunk_length_s: 30,
+                    stride_length_s: 5,
+                    return_timestamps: true,
+                })
+            } finally {
+                clearInterval(inferenceTicker)
+            }
+
+            // Finalize with the locally downloaded video, audio URLs, and rich transcription object
             updateJob(id, {
                 status: "completed",
                 progress: 100,
                 videoUrl: `/downloads/${fileName}`,
                 audioUrl: `/downloads/${audioFileName}`,
+                transcription: result,
             })
         } catch (error) {
             console.error("Job failed:", error)
