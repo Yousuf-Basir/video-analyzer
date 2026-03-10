@@ -1,41 +1,28 @@
 import { workerData, parentPort } from 'worker_threads';
 import { env, pipeline } from '@xenova/transformers';
 import fs from 'fs';
-import { createRequire } from 'module';
-const require = createRequire(import.meta.url);
-const { WaveFile } = require('wavefile');
 
 env.useBrowserCache = false;
 
 async function run() {
     const { audioFilePath } = workerData;
 
-    // Read the WAV file and convert to Float32Array for Whisper natively
-    const wavBuffer = fs.readFileSync(audioFilePath)
-    const wav = new WaveFile(wavBuffer)
-    wav.toBitDepth('32f')
-    wav.toSampleRate(16000)
+    const rawBuffer = fs.readFileSync(audioFilePath);
+    const audioData = new Float32Array(rawBuffer.buffer, rawBuffer.byteOffset, rawBuffer.byteLength / 4);
 
-    let rawSamples = wav.getSamples()
-    let audioData;
-    if (Array.isArray(rawSamples)) {
-        audioData = new Float32Array(rawSamples.length > 0 ? rawSamples[0] : 0)
-    } else {
-        audioData = new Float32Array(rawSamples)
-    }
-
+    parentPort.postMessage({ type: 'status', status: 'loading_model' });
     const transcriber = await pipeline('automatic-speech-recognition', 'Xenova/whisper-tiny.en', {
         progress_callback: (data) => {
             parentPort.postMessage({ type: 'progress', data });
         }
     });
 
-    parentPort.postMessage({ type: 'loaded' });
+    parentPort.postMessage({ type: 'status', status: 'running_inference' });
 
     const result = await transcriber(audioData, {
         chunk_length_s: 30,
         stride_length_s: 5,
-        return_timestamps: true,
+        return_timestamps: true
     });
 
     parentPort.postMessage({ type: 'done', result });
