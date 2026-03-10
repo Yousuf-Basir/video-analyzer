@@ -8,7 +8,7 @@ import { CheckCircle2, Circle, Loader2 } from "lucide-react"
 type JobState = {
   id: string
   url: string
-  status: "pending" | "downloading" | "converting" | "transcribing" | "completed" | "error"
+  status: "pending" | "downloading" | "converting" | "transcribing" | "completed" | "error" | "stopped"
   progress: number
   videoUrl?: string
   audioUrl?: string
@@ -22,8 +22,26 @@ export default function Page() {
   const [loading, setLoading] = useState(false)
 
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const existingJobId = params.get("jobId")
+    if (existingJobId && !job) {
+      fetch(`/api/jobs/${existingJobId}`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((data) => {
+          if (data && !data.error) setJob(data)
+        })
+    }
+  }, [])
+
+  useEffect(() => {
+    if (job && job.id) {
+      window.history.replaceState(null, "", `?jobId=${job.id}`)
+    } else if (!job) {
+      window.history.replaceState(null, "", window.location.pathname)
+    }
+
     let interval: NodeJS.Timeout
-    if (job && (job.status === "pending" || job.status === "downloading" || job.status === "converting" || job.status === "transcribing")) {
+    if (job && ["pending", "downloading", "converting", "transcribing"].includes(job.status)) {
       interval = setInterval(async () => {
         const res = await fetch(`/api/jobs/${job.id}`, { cache: "no-store", headers: { 'Cache-Control': 'no-cache' } })
         if (res.ok) {
@@ -34,6 +52,18 @@ export default function Page() {
     }
     return () => clearInterval(interval)
   }, [job])
+
+  const handleStop = async () => {
+    if (!job) return
+    setLoading(true)
+    await fetch(`/api/jobs/${job.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "stop" }),
+    })
+    setJob({ ...job, status: "stopped" })
+    setLoading(false)
+  }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -93,102 +123,113 @@ export default function Page() {
         )}
 
         {/* Unified Pipeline UI */}
-        {job && ["pending", "downloading", "converting", "transcribing"].includes(job.status) && (
+        {job && ["pending", "downloading", "converting", "transcribing", "stopped"].includes(job.status) && (
           <div className="flex flex-col gap-6 max-w-md mx-auto w-full p-6 border rounded-xl bg-card shadow-sm animate-in fade-in zoom-in duration-300">
-            <h2 className="text-xl font-bold border-b pb-4">Processing Pipeline</h2>
+            <div className="flex justify-between items-center border-b pb-4">
+              <h2 className="text-xl font-bold">Processing Pipeline</h2>
+              {job.status !== "stopped" && job.status !== "error" && (
+                <Button variant="destructive" size="sm" onClick={handleStop} disabled={loading}>Stop</Button>
+              )}
+            </div>
 
-            <div className="flex flex-col gap-5">
-
-              {/* Downloading Step */}
-              <div className="flex items-start gap-4">
-                <div className="mt-1">
-                  {job.status === 'pending' || job.status === 'downloading' ? (
-                    <Loader2 className="w-5 h-5 animate-spin text-primary" />
-                  ) : (
-                    <CheckCircle2 className="w-5 h-5 text-green-500" />
-                  )}
-                </div>
-                <div className="flex-1 flex flex-col gap-2">
-                  <div className="flex justify-between items-center text-sm font-semibold">
-                    <span>Downloading Original Video</span>
-                    <span className="text-muted-foreground">
-                      {["converting", "transcribing"].includes(job.status) ? "100%" : `${job.progress}%`}
-                    </span>
-                  </div>
-                  {(job.status === 'pending' || job.status === 'downloading') && (
-                    <div className="h-2 w-full bg-secondary overflow-hidden rounded-full">
-                      <div className="h-full bg-primary transition-all duration-300" style={{ width: `${job.progress}%` }} />
-                    </div>
-                  )}
-                </div>
+            {job.status === "stopped" ? (
+              <div className="text-sm text-destructive bg-destructive/10 p-3 rounded-md mt-2">
+                Processing has been forcefully stopped. All resources freed.
               </div>
+            ) : (
+              <div className="flex flex-col gap-5">
 
-              {/* Converting Step */}
-              <div className={`flex items-start gap-4 transition-opacity ${['pending', 'downloading'].includes(job.status) ? 'opacity-40' : 'opacity-100'}`}>
-                <div className="mt-1">
-                  {['pending', 'downloading'].includes(job.status) ? (
-                    <Circle className="w-5 h-5 text-muted-foreground" />
-                  ) : job.status === 'converting' ? (
-                    <Loader2 className="w-5 h-5 animate-spin text-primary" />
-                  ) : (
-                    <CheckCircle2 className="w-5 h-5 text-green-500" />
-                  )}
-                </div>
-                <div className="flex-1 flex flex-col gap-2">
-                  <div className="flex justify-between items-center text-sm font-semibold">
-                    <span>Extracting Audio Stream</span>
-                    <span className="text-muted-foreground">
-                      {job.status === 'transcribing' ? "100%" : (job.status === 'converting' && job.progress === 0) ? "" : job.status === 'converting' ? `${job.progress}%` : "0%"}
-                    </span>
+                {/* Downloading Step */}
+                <div className="flex items-start gap-4">
+                  <div className="mt-1">
+                    {job.status === 'pending' || job.status === 'downloading' ? (
+                      <Loader2 className="w-5 h-5 animate-spin text-primary" />
+                    ) : (
+                      <CheckCircle2 className="w-5 h-5 text-green-500" />
+                    )}
                   </div>
-                  {job.status === 'converting' && (
-                    <div className="h-2 w-full bg-secondary overflow-hidden rounded-full">
-                      {job.progress === 0 ? (
-                        <div className="h-full bg-primary/70 animate-indeterminate rounded-full" />
-                      ) : (
-                        <div className="h-full bg-primary transition-all duration-300" style={{ width: `${job.progress}%` }} />
-                      )}
+                  <div className="flex-1 flex flex-col gap-2">
+                    <div className="flex justify-between items-center text-sm font-semibold">
+                      <span>Downloading Original Video</span>
+                      <span className="text-muted-foreground">
+                        {["converting", "transcribing"].includes(job.status) ? "100%" : `${job.progress}%`}
+                      </span>
                     </div>
-                  )}
-                </div>
-              </div>
-
-              {/* Transcribing Step */}
-              <div className={`flex items-start gap-4 transition-opacity ${['pending', 'downloading', 'converting'].includes(job.status) ? 'opacity-40' : 'opacity-100'}`}>
-                <div className="mt-1">
-                  {['pending', 'downloading', 'converting'].includes(job.status) ? (
-                    <Circle className="w-5 h-5 text-muted-foreground" />
-                  ) : job.status === 'transcribing' ? (
-                    <Loader2 className="w-5 h-5 animate-spin text-primary" />
-                  ) : (
-                    <CheckCircle2 className="w-5 h-5 text-green-500" />
-                  )}
-                </div>
-                <div className="flex-1 flex flex-col gap-2">
-                  <div className="flex justify-between items-center text-sm font-semibold">
-                    <span>Running AI Transcription</span>
-                    <span className="text-muted-foreground">
-                      {(job.status === 'transcribing' && job.progress === 50) ? "" : job.status === 'transcribing' ? `${job.progress}%` : "0%"}
-                    </span>
-                  </div>
-                  {job.status === 'transcribing' && (
-                    <>
+                    {(job.status === 'pending' || job.status === 'downloading') && (
                       <div className="h-2 w-full bg-secondary overflow-hidden rounded-full">
-                        {job.progress === 50 ? (
+                        <div className="h-full bg-primary transition-all duration-300" style={{ width: `${job.progress}%` }} />
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Converting Step */}
+                <div className={`flex items-start gap-4 transition-opacity ${['pending', 'downloading'].includes(job.status) ? 'opacity-40' : 'opacity-100'}`}>
+                  <div className="mt-1">
+                    {['pending', 'downloading'].includes(job.status) ? (
+                      <Circle className="w-5 h-5 text-muted-foreground" />
+                    ) : job.status === 'converting' ? (
+                      <Loader2 className="w-5 h-5 animate-spin text-primary" />
+                    ) : (
+                      <CheckCircle2 className="w-5 h-5 text-green-500" />
+                    )}
+                  </div>
+                  <div className="flex-1 flex flex-col gap-2">
+                    <div className="flex justify-between items-center text-sm font-semibold">
+                      <span>Extracting Audio Stream</span>
+                      <span className="text-muted-foreground">
+                        {job.status === 'transcribing' ? "100%" : (job.status === 'converting' && job.progress === 0) ? "" : job.status === 'converting' ? `${job.progress}%` : "0%"}
+                      </span>
+                    </div>
+                    {job.status === 'converting' && (
+                      <div className="h-2 w-full bg-secondary overflow-hidden rounded-full">
+                        {job.progress === 0 ? (
                           <div className="h-full bg-primary/70 animate-indeterminate rounded-full" />
                         ) : (
                           <div className="h-full bg-primary transition-all duration-300" style={{ width: `${job.progress}%` }} />
                         )}
                       </div>
-                      <p className="text-xs text-muted-foreground mt-1">
-                        {job.progress < 50 ? "Downloading ML weights..." : "Inference running on CPU, please wait..."}
-                      </p>
-                    </>
-                  )}
+                    )}
+                  </div>
                 </div>
-              </div>
 
-            </div>
+                {/* Transcribing Step */}
+                <div className={`flex items-start gap-4 transition-opacity ${['pending', 'downloading', 'converting'].includes(job.status) ? 'opacity-40' : 'opacity-100'}`}>
+                  <div className="mt-1">
+                    {['pending', 'downloading', 'converting'].includes(job.status) ? (
+                      <Circle className="w-5 h-5 text-muted-foreground" />
+                    ) : job.status === 'transcribing' ? (
+                      <Loader2 className="w-5 h-5 animate-spin text-primary" />
+                    ) : (
+                      <CheckCircle2 className="w-5 h-5 text-green-500" />
+                    )}
+                  </div>
+                  <div className="flex-1 flex flex-col gap-2">
+                    <div className="flex justify-between items-center text-sm font-semibold">
+                      <span>Running AI Transcription</span>
+                      <span className="text-muted-foreground">
+                        {(job.status === 'transcribing' && job.progress === 50) ? "" : job.status === 'transcribing' ? `${job.progress}%` : "0%"}
+                      </span>
+                    </div>
+                    {job.status === 'transcribing' && (
+                      <>
+                        <div className="h-2 w-full bg-secondary overflow-hidden rounded-full">
+                          {job.progress === 50 ? (
+                            <div className="h-full bg-primary/70 animate-indeterminate rounded-full" />
+                          ) : (
+                            <div className="h-full bg-primary transition-all duration-300" style={{ width: `${job.progress}%` }} />
+                          )}
+                        </div>
+                        <p className="text-xs text-muted-foreground mt-1">
+                          {job.progress > 0 && job.progress < 50 ? "Downloading AI model (first run)..." : job.progress === 0 ? "Loading AI model..." : "Inference running on CPU, please wait..."}
+                        </p>
+                      </>
+                    )}
+                  </div>
+                </div>
+
+              </div>
+            )}
           </div>
         )}
 

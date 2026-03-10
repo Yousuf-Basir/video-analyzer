@@ -38,3 +38,5 @@ next-env.d.ts
 # local processing data
 jobs.json
 public/downloads/
+
+.env

@@ -3,7 +3,7 @@ import path from "path"
 
 const dbPath = path.resolve(process.cwd(), "jobs.json")
 
-export type JobStatus = "pending" | "downloading" | "converting" | "transcribing" | "completed" | "error"
+export type JobStatus = "pending" | "downloading" | "converting" | "transcribing" | "completed" | "error" | "stopped"
 
 export interface Job {
     id: string
@@ -20,9 +20,9 @@ export function getJobs(): Record<string, Job> {
     if (!fs.existsSync(dbPath)) return {}
     try {
         const data = fs.readFileSync(dbPath, "utf-8")
-        return JSON.parse(data)
+        return JSON.parse(data) as Record<string, Job>
     } catch (e) {
-        return {}
+        return {} as Record<string, Job>
     }
 }
 
@@ -37,6 +37,11 @@ export function getJob(id: string): Job | undefined {
 export function updateJob(id: string, updates: Partial<Job>) {
     const jobs = getJobs()
     if (jobs[id]) {
+        // Lock: If the job is already completely stopped by the user, 
+        // silently reject any incoming lagging worker progress updaters trying to revive it.
+        if (jobs[id].status === "stopped" && updates.status !== "stopped") {
+            return;
+        }
         jobs[id] = { ...jobs[id], ...updates }
         saveJobs(jobs)
     }

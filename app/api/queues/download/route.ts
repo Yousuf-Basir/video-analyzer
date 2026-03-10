@@ -4,11 +4,7 @@ import fs from "fs"
 import path from "path"
 import ffmpeg from "fluent-ffmpeg"
 import ffmpegInstaller from "@ffmpeg-installer/ffmpeg"
-import { env, pipeline } from "@xenova/transformers"
-import { WaveFile } from "wavefile"
-
-// Set Hugging Face cache config to work exclusively in Node.js instead of browser mode
-env.useBrowserCache = false;
+import { Worker } from "worker_threads"
 
 // Link fluent-ffmpeg to the static binary
 ffmpeg.setFfmpegPath(ffmpegInstaller.path)
@@ -57,6 +53,13 @@ export const downloadQueue = Queue(
                 let lastReportedProgress = 0
 
                 while (true) {
+                    const currentJob = getJob(id)
+                    if (currentJob?.status === "stopped") {
+                        fileStream.destroy()
+                        await reader.cancel()
+                        throw new Error("Job forcefully stopped by user during download")
+                    }
+
                     const { done, value } = await reader.read()
                     if (done) break
 
@@ -96,7 +99,7 @@ export const downloadQueue = Queue(
                 let lastReportedProgress = 0;
                 let totalDurationSeconds = 0;
 
-                ffmpeg(filePath)
+                const cmd = ffmpeg(filePath)
                     .output(audioFilePath)
                     .noVideo()
                     .audioCodec('pcm_s16le')
@@ -115,6 +118,12 @@ export const downloadQueue = Queue(
                         }
                     })
                     .on('progress', (progress) => {
+                        const currentJob = getJob(id)
+                        if (currentJob?.status === "stopped") {
+                            cmd.kill('SIGKILL');
+                            return reject(new Error("Job forcefully stopped by user during conversion"));
+                        }
+
                         let currentPercent = progress.percent;
 
                         // Fallback manual percent calculation using 'timemark' and 'codecData' duration
@@ -150,78 +159,83 @@ export const downloadQueue = Queue(
                     .on('error', (err) => {
                         console.error('An error occurred generating audio: ' + err.message)
                         reject(err)
-                    })
-                    .run()
+                    });
+
+                cmd.run();
             })
 
             // --- Transcribing Step ---
             updateJob(id, { status: "transcribing", progress: 0 })
 
-            // Read the WAV file and convert to Float32Array for Whisper natively
-            const wavBuffer = fs.readFileSync(audioFilePath)
-            const wav = new WaveFile(wavBuffer)
-            wav.toBitDepth('32f')
-            wav.toSampleRate(16000)
-
-            let rawSamples = wav.getSamples()
-            let audioData: Float32Array
-            if (Array.isArray(rawSamples)) {
-                if (rawSamples.length > 0) {
-                    audioData = new Float32Array(rawSamples[0]) // take the first channel
-                } else {
-                    audioData = new Float32Array(0)
-                }
-            } else {
-                audioData = new Float32Array(rawSamples)
-            }
-
-            // A singleton pipeline to download/cache the model locally on first run
-            let filesProgress: Record<string, number> = {}
-            let maxTranscribingProgress = 0
-
-            const transcriber = await pipeline('automatic-speech-recognition', 'Xenova/whisper-tiny.en', {
-                progress_callback: (data: any) => {
-                    if (data.status === 'progress' && data.name) {
-                        filesProgress[data.name] = data.progress
-
-                        const values = Object.values(filesProgress)
-                        const avg = values.reduce((a, b) => a + b, 0) / values.length
-                        const calculatedProgress = Math.min(Math.round(avg * 0.5), 50)
-
-                        if (calculatedProgress > maxTranscribingProgress) {
-                            maxTranscribingProgress = calculatedProgress
-                            updateJob(id, {
-                                status: "transcribing",
-                                progress: maxTranscribingProgress
-                            })
-                        }
-                    }
-                }
-            })
-
-            // Run the transformer inference using the CPU
-            updateJob(id, { status: "transcribing", progress: 50 })
-
-            // Setup a faked progress ticker for the inference phase (50 -> 99%)
             let inferenceProgress = 50
-            const inferenceTicker = setInterval(() => {
-                if (inferenceProgress < 99) {
-                    inferenceProgress += 1
-                    updateJob(id, { status: "transcribing", progress: inferenceProgress })
-                }
-            }, 1000) // tick 1% every second during heavy compute
+            let maxTranscribingProgress = 0
+            let filesProgress: Record<string, number> = {}
 
-            let result: any;
-            try {
-                // Pass configuration options to process long audio perfectly and extract sentence timestamps
-                result = await transcriber(audioData, {
-                    chunk_length_s: 30,
-                    stride_length_s: 5,
-                    return_timestamps: true,
+            const result = await new Promise((resolve, reject) => {
+                const workerScriptPath = path.resolve(process.cwd(), "transcribe-worker.mjs")
+                const worker = new Worker(workerScriptPath, {
+                    workerData: { audioFilePath }
                 })
-            } finally {
-                clearInterval(inferenceTicker)
-            }
+
+                let inferenceTicker: NodeJS.Timeout | null = null;
+                let stopChecker: NodeJS.Timeout = setInterval(() => {
+                    const currentJob = getJob(id);
+                    if (currentJob?.status === "stopped") {
+                        worker.terminate();
+                        if (inferenceTicker) clearInterval(inferenceTicker);
+                        clearInterval(stopChecker);
+                        reject(new Error("Job forcefully stopped by user during inference"));
+                    }
+                }, 1000);
+
+                worker.on('message', (msg) => {
+                    if (msg.type === 'progress') {
+                        const data = msg.data;
+                        if (data.status === 'progress' && data.name) {
+                            filesProgress[data.name] = data.progress;
+                            const values = Object.values(filesProgress);
+                            const avg = values.reduce((a, b) => a + b, 0) / values.length;
+                            const calculatedProgress = Math.min(Math.round(avg * 0.5), 50);
+
+                            if (calculatedProgress > maxTranscribingProgress) {
+                                maxTranscribingProgress = calculatedProgress;
+                                updateJob(id, {
+                                    status: "transcribing",
+                                    progress: maxTranscribingProgress
+                                });
+                            }
+                        }
+                    } else if (msg.type === 'loaded') {
+                        updateJob(id, { status: "transcribing", progress: 50 });
+                        inferenceTicker = setInterval(() => {
+                            if (inferenceProgress < 99) {
+                                inferenceProgress += 1;
+                                updateJob(id, { status: "transcribing", progress: inferenceProgress });
+                            }
+                        }, 1000);
+                    } else if (msg.type === 'done') {
+                        if (inferenceTicker) clearInterval(inferenceTicker);
+                        clearInterval(stopChecker);
+                        resolve(msg.result);
+                    } else if (msg.type === 'error') {
+                        if (inferenceTicker) clearInterval(inferenceTicker);
+                        clearInterval(stopChecker);
+                        reject(new Error(msg.error));
+                    }
+                });
+
+                worker.on('error', (err) => {
+                    if (inferenceTicker) clearInterval(inferenceTicker);
+                    clearInterval(stopChecker);
+                    reject(err);
+                });
+
+                worker.on('exit', (code) => {
+                    if (inferenceTicker) clearInterval(inferenceTicker);
+                    clearInterval(stopChecker);
+                    if (code !== 0) reject(new Error(`Worker stopped with exit code ${code}`));
+                });
+            });
 
             // Finalize with the locally downloaded video, audio URLs, and rich transcription object
             updateJob(id, {
