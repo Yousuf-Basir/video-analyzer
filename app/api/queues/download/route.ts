@@ -4,7 +4,7 @@ import fs from "fs"
 import path from "path"
 import ffmpeg from "fluent-ffmpeg"
 import ffmpegInstaller from "@ffmpeg-installer/ffmpeg"
-import { Worker } from "worker_threads"
+// Removed static import to avoid Turbopack tracing issue
 
 // Link fluent-ffmpeg to the static binary
 ffmpeg.setFfmpegPath(ffmpegInstaller.path)
@@ -183,6 +183,7 @@ export const downloadQueue = Queue(
       // --- Transcribing Step ---
       updateJob(id, { status: "transcribing", progress: 0 })
 
+      const { Worker } = await eval("import('node:worker_threads')")
       const result = await new Promise((resolve, reject) => {
         const workerScriptPath = path.resolve(
           process.cwd(),
@@ -202,7 +203,7 @@ export const downloadQueue = Queue(
         }, 1000)
 
         // To keep the UI state minimal, we will store progress as 0 for loading, 1 for inference.
-        worker.on("message", (msg) => {
+        worker.on("message", (msg: any) => {
           if (msg.type === "status") {
             if (msg.status === "loading_model") {
               updateJob(id, { status: "transcribing", progress: 0 })
@@ -218,12 +219,12 @@ export const downloadQueue = Queue(
           }
         })
 
-        worker.on("error", (err) => {
+        worker.on("error", (err: Error) => {
           clearInterval(stopChecker)
           reject(err)
         })
 
-        worker.on("exit", (code) => {
+        worker.on("exit", (code: number) => {
           clearInterval(stopChecker)
           if (code !== 0)
             reject(new Error(`Worker stopped with exit code ${code}`))

@@ -1,6 +1,6 @@
-import { workerData, parentPort } from 'worker_threads';
-import { env, pipeline } from '@xenova/transformers';
-import fs from 'fs';
+const { workerData, parentPort } = await eval("import('node:worker_threads')");
+const { env, pipeline } = await eval("import('@xenova/transformers')");
+const fs = (await eval("import('fs')")).default;
 
 env.useBrowserCache = false;
 
