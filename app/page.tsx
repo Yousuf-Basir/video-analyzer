@@ -3,19 +3,21 @@
 import { useState, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { Checkbox } from "@/components/ui/checkbox"
+import { Label } from "@/components/ui/label"
 import { CheckCircle2, Circle, Loader2, UploadCloud } from "lucide-react"
 
 type JobState = {
   id: string
   url: string
   status:
-    | "pending"
-    | "downloading"
-    | "converting"
-    | "transcribing"
-    | "completed"
-    | "error"
-    | "stopped"
+  | "pending"
+  | "downloading"
+  | "converting"
+  | "transcribing"
+  | "completed"
+  | "error"
+  | "stopped"
   progress: number
   videoUrl?: string
   audioUrl?: string
@@ -24,10 +26,14 @@ type JobState = {
 }
 
 export default function Page() {
-  const [url, setUrl] = useState("")
+  const [url, setUrl] = useState(process.env.NEXT_PUBLIC_DEFAULT_VIDEO_LINK || "")
   const [file, setFile] = useState<File | null>(null)
   const [job, setJob] = useState<JobState | null>(null)
   const [loading, setLoading] = useState(false)
+  const [options, setOptions] = useState({
+    checkExisting: true,
+    transcribe: true,
+  })
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
@@ -136,7 +142,7 @@ export default function Page() {
       res = await fetch("/api/jobs", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url }),
+        body: JSON.stringify({ url, options }),
       })
     }
 
@@ -156,6 +162,22 @@ export default function Page() {
     setJob(null)
     setUrl("")
     setFile(null)
+  }
+
+  const handleTranscribeNow = async () => {
+    if (!job) return
+    setLoading(true)
+    const res = await fetch(`/api/jobs/${job.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "transcribe" }),
+    })
+    if (res.ok) {
+      // The API returns { success: true, status: "pending" }
+      // We should manually update local state to trigger polling
+      setJob({ ...job, status: "pending", progress: 0 })
+    }
+    setLoading(false)
   }
 
   return (
@@ -227,6 +249,46 @@ export default function Page() {
                 disabled={loading}
               />
             </div>
+
+            <div className="flex flex-col gap-4 px-1">
+              <div className="flex items-center space-x-2">
+                <Checkbox
+                  id="checkExisting"
+                  checked={options.checkExisting}
+                  onCheckedChange={(checked) =>
+                    setOptions((prev) => ({
+                      ...prev,
+                      checkExisting: checked === true,
+                    }))
+                  }
+                />
+                <Label
+                  htmlFor="checkExisting"
+                  className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
+                >
+                  Reuse existing file if available
+                </Label>
+              </div>
+              <div className="flex items-center space-x-2">
+                <Checkbox
+                  id="transcribe"
+                  checked={options.transcribe}
+                  onCheckedChange={(checked) =>
+                    setOptions((prev) => ({
+                      ...prev,
+                      transcribe: checked === true,
+                    }))
+                  }
+                />
+                <Label
+                  htmlFor="transcribe"
+                  className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
+                >
+                  Transcribe video automatically
+                </Label>
+              </div>
+            </div>
+
             <Button
               type="submit"
               className="w-full"
@@ -262,7 +324,7 @@ export default function Page() {
                 <div className="flex items-start gap-4">
                   <div className="mt-1">
                     {job.status === "pending" ||
-                    job.status === "downloading" ? (
+                      job.status === "downloading" ? (
                       <Loader2 className="h-5 w-5 animate-spin text-primary" />
                     ) : (
                       <CheckCircle2 className="h-5 w-5 text-green-500" />
@@ -283,13 +345,13 @@ export default function Page() {
                     </div>
                     {(job.status === "pending" ||
                       job.status === "downloading") && (
-                      <div className="h-2 w-full overflow-hidden rounded-full bg-secondary">
-                        <div
-                          className="h-full bg-primary transition-all duration-300"
-                          style={{ width: `${job.progress}%` }}
-                        />
-                      </div>
-                    )}
+                        <div className="h-2 w-full overflow-hidden rounded-full bg-secondary">
+                          <div
+                            className="h-full bg-primary transition-all duration-300"
+                            style={{ width: `${job.progress}%` }}
+                          />
+                        </div>
+                      )}
                   </div>
                 </div>
 
@@ -403,8 +465,8 @@ export default function Page() {
                         .substr(14, 5)
                       const end = chunk.timestamp[1]
                         ? new Date(chunk.timestamp[1] * 1000)
-                            .toISOString()
-                            .substr(14, 5)
+                          .toISOString()
+                          .substr(14, 5)
                         : "end"
                       return (
                         <div
@@ -427,8 +489,23 @@ export default function Page() {
                       {job.transcription}
                     </div>
                   ) : (
-                    <div className="text-muted-foreground">
-                      No spoken language detected.
+                    <div className="flex flex-col items-center gap-4 py-8 text-center">
+                      <p className="text-muted-foreground">
+                        No transcription available for this video.
+                      </p>
+                      <Button
+                        onClick={handleTranscribeNow}
+                        disabled={loading}
+                        variant="outline"
+                        size="sm"
+                        className="w-fit"
+                      >
+                        {loading ? (
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        ) : (
+                          "Transcribe Now"
+                        )}
+                      </Button>
                     </div>
                   )}
                 </div>

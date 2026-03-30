@@ -93,9 +93,18 @@ export const downloadQueue = Queue(
         } else {
           updateJob(id, { progress: 100, status: "downloading" })
         }
-      } else {
-        // Local file uploading already placed it in filePath
+      // Local file uploading already placed it in filePath
         updateJob(id, { progress: 100, status: "downloading" })
+      }
+
+      if (job.options?.transcribe === false) {
+        // Finalize with the locally downloaded video, no transcription
+        updateJob(id, {
+          status: "completed",
+          progress: 100,
+          videoUrl: `/downloads/${fileName}`,
+        })
+        return
       }
 
       // --- Conversion Step ---

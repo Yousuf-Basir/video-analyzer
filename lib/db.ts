@@ -12,6 +12,11 @@ export type JobStatus =
   | "error"
   | "stopped"
 
+export interface JobOptions {
+  checkExisting?: boolean
+  transcribe?: boolean
+}
+
 export interface Job {
   id: string
   url: string
@@ -22,6 +27,7 @@ export interface Job {
   audioUrl?: string
   thumbnailUrl?: string
   transcription?: any
+  options?: JobOptions
 }
 
 export function getJobs(): Record<string, Job> {
@@ -59,4 +65,12 @@ export function createJob(job: Job) {
   const jobs = getJobs()
   jobs[job.id] = job
   saveJobs(jobs)
+}
+
+export function findJobByUrl(url: string): Job | undefined {
+  const jobs = getJobs()
+  // Return the first completed job for this URL
+  return Object.values(jobs).find(
+    (j) => j.url === url && j.status === "completed"
+  )
 }
