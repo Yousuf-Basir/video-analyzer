@@ -5,7 +5,8 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Label } from "@/components/ui/label"
-import { CheckCircle2, Circle, Loader2, UploadCloud } from "lucide-react"
+import { Dialog, DialogContent, DialogTitle, DialogHeader } from "@/components/ui/dialog"
+import { CheckCircle2, Circle, Loader2, UploadCloud, Timer, ImageIcon } from "lucide-react"
 
 type JobState = {
   id: string
@@ -15,6 +16,7 @@ type JobState = {
   | "downloading"
   | "converting"
   | "transcribing"
+  | "capturing_frames"
   | "completed"
   | "error"
   | "stopped"
@@ -23,6 +25,7 @@ type JobState = {
   audioUrl?: string
   thumbnailUrl?: string
   transcription?: any
+  frames?: { url: string; timestamp: number }[]
 }
 
 export default function Page() {
@@ -33,7 +36,10 @@ export default function Page() {
   const [options, setOptions] = useState({
     checkExisting: true,
     transcribe: true,
+    captureFrames: true,
+    frameCount: 5,
   })
+  const [selectedImage, setSelectedImage] = useState<string | null>(null)
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
@@ -70,7 +76,7 @@ export default function Page() {
     let interval: NodeJS.Timeout
     if (
       job &&
-      ["pending", "downloading", "converting", "transcribing"].includes(
+      ["pending", "downloading", "converting", "transcribing", "capturing_frames"].includes(
         job.status
       )
     ) {
@@ -287,6 +293,49 @@ export default function Page() {
                   Transcribe video automatically
                 </Label>
               </div>
+
+              <div className="flex flex-col gap-3 pt-2">
+                <div className="flex items-center space-x-2">
+                  <Checkbox
+                    id="captureFrames"
+                    checked={options.captureFrames}
+                    onCheckedChange={(checked) =>
+                      setOptions((prev) => ({
+                        ...prev,
+                        captureFrames: checked === true,
+                      }))
+                    }
+                  />
+                  <Label
+                    htmlFor="captureFrames"
+                    className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
+                  >
+                    Capture frames from video
+                  </Label>
+                </div>
+                
+                {options.captureFrames && (
+                  <div className="flex flex-col gap-2 pl-6 animate-in slide-in-from-left-2 duration-200">
+                    <Label htmlFor="frameCount" className="text-xs text-muted-foreground">
+                      Number of frames: {options.frameCount}
+                    </Label>
+                    <input
+                      id="frameCount"
+                      type="range"
+                      min="1"
+                      max="20"
+                      value={options.frameCount}
+                      onChange={(e) =>
+                        setOptions((prev) => ({
+                          ...prev,
+                          frameCount: parseInt(e.target.value),
+                        }))
+                      }
+                      className="w-full h-1.5 bg-secondary rounded-lg appearance-none cursor-pointer accent-primary"
+                    />
+                  </div>
+                )}
+              </div>
             </div>
 
             <Button
@@ -300,8 +349,8 @@ export default function Page() {
         )}
 
         {/* Unified Pipeline UI */}
-        {job &&
-          ["pending", "downloading", "converting", "transcribing"].includes(
+    {job &&
+          ["pending", "downloading", "converting", "transcribing", "capturing_frames"].includes(
             job.status
           ) && (
             <div className="mx-auto flex w-full max-w-md animate-in flex-col gap-6 rounded-xl border bg-card p-6 shadow-sm duration-300 fade-in zoom-in">
@@ -432,6 +481,39 @@ export default function Page() {
                     )}
                   </div>
                 </div>
+
+                {/* Capturing Frames Step */}
+                <div
+                  className={`flex items-start gap-4 transition-opacity ${["pending", "downloading", "converting", "transcribing"].includes(job.status) ? "opacity-40" : "opacity-100"}`}
+                >
+                  <div className="mt-1">
+                    {["pending", "downloading", "converting", "transcribing"].includes(
+                      job.status
+                    ) ? (
+                      <Circle className="h-5 w-5 text-muted-foreground" />
+                    ) : job.status === "capturing_frames" ? (
+                      <Loader2 className="h-5 w-5 animate-spin text-primary" />
+                    ) : (
+                      <CheckCircle2 className="h-5 w-5 text-green-500" />
+                    )}
+                  </div>
+                  <div className="flex flex-1 flex-col gap-2">
+                    <div className="flex items-center justify-between text-sm font-semibold">
+                      <span>Capturing Frames</span>
+                      <span className="text-muted-foreground">
+                        {job.status === "capturing_frames" && `${job.progress}%`}
+                      </span>
+                    </div>
+                    {job.status === "capturing_frames" && (
+                      <div className="h-2 w-full overflow-hidden rounded-full bg-secondary">
+                        <div
+                          className="h-full bg-primary transition-all duration-300"
+                          style={{ width: `${job.progress}%` }}
+                        />
+                      </div>
+                    )}
+                  </div>
+                </div>
               </div>
             </div>
           )}
@@ -445,12 +527,44 @@ export default function Page() {
                 <div className="overflow-hidden rounded-xl border bg-card shadow-sm">
                   <video
                     controls
-                    poster={job.thumbnailUrl}
+                    poster={job.thumbnailUrl || (job.frames ? job.frames[0]?.url : undefined)}
                     src={job.videoUrl}
                     className="aspect-video w-full object-cover"
                   />
                 </div>
               </div>
+
+              {/* Frames Grid */}
+              {job.frames && job.frames.length > 0 && (
+                <div className="flex w-full flex-col gap-3 rounded-xl border bg-card p-5 shadow-sm">
+                  <h3 className="border-b pb-2 text-lg font-semibold flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <ImageIcon className="h-5 w-5 text-primary" />
+                      Captured Frames
+                    </div>
+                    <span className="text-xs font-normal text-muted-foreground">{job.frames.length} frames</span>
+                  </h3>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3">
+                    {job.frames.map((frame, i) => (
+                      <div 
+                        key={i} 
+                        className="group relative aspect-video cursor-pointer overflow-hidden rounded-lg border bg-muted" 
+                        onClick={() => setSelectedImage(frame.url)}
+                      >
+                         <img 
+                           src={frame.url} 
+                           alt={`Frame at ${frame.timestamp}`}
+                           className="h-full w-full object-cover transition-transform group-hover:scale-105" 
+                         />
+                         <div className="absolute bottom-1 right-1 rounded-md bg-black/70 px-1.5 py-0.5 text-[10px] font-mono text-white flex items-center gap-1">
+                            <Timer className="h-2 w-2" />
+                            {new Date(frame.timestamp * 1000).toISOString().substr(14, 5)}
+                         </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               {/* Transcription */}
               <div className="flex w-full flex-col gap-3 rounded-xl border bg-card p-5 shadow-sm">
@@ -534,6 +648,24 @@ export default function Page() {
           </div>
         )}
       </div>
+
+      {/* Lightbox */}
+      <Dialog open={!!selectedImage} onOpenChange={() => setSelectedImage(null)}>
+        <DialogContent className="max-w-4xl p-0 border-none bg-transparent shadow-none [&>button]:text-white">
+          <DialogHeader className="sr-only">
+            <DialogTitle>Frame Preview</DialogTitle>
+          </DialogHeader>
+          <div className="flex items-center justify-center p-2">
+            {selectedImage && (
+              <img 
+                src={selectedImage} 
+                className="max-h-[85vh] w-auto rounded-lg shadow-2xl animate-in zoom-in-95 duration-200" 
+                alt="Captured Frame Large Preview"
+              />
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

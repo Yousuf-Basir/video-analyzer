@@ -4,10 +4,11 @@ import fs from "fs"
 import path from "path"
 import ffmpeg from "fluent-ffmpeg"
 import ffmpegInstaller from "@ffmpeg-installer/ffmpeg"
-// Removed static import to avoid Turbopack tracing issue
+import ffprobeInstaller from "@ffprobe-installer/ffprobe"
 
-// Link fluent-ffmpeg to the static binary
+// Link fluent-ffmpeg to the static binaries
 ffmpeg.setFfmpegPath(ffmpegInstaller.path)
+ffmpeg.setFfprobePath(ffprobeInstaller.path)
 
 export const downloadQueue = Queue(
   "api/queues/download",
@@ -20,6 +21,10 @@ export const downloadQueue = Queue(
       return
     }
 
+    const transcribeEnabled = job.options?.transcribe !== false
+    const captureFramesEnabled = job.options?.captureFrames !== false
+    const frameCount = job.options?.frameCount || 5
+
     try {
       updateJob(id, { status: "downloading", progress: 0 })
 
@@ -31,7 +36,19 @@ export const downloadQueue = Queue(
       const fileName = `${id}.mp4`
       const filePath = path.join(downloadsDir, fileName)
 
-      if (job.url !== "local" && !job.isLocal) {
+      // --- Download / Reuse Step ---
+      if (job.videoUrl && job.videoUrl.startsWith("/downloads/")) {
+        const localPath = path.join(process.cwd(), "public", job.videoUrl)
+        if (fs.existsSync(localPath)) {
+          console.log("Reusing existing file for job:", id, "at", localPath)
+          // If the reused file is named differently, it's better to copy or symlink it to our job-specific ID.
+          // This keeps the ID -> filename mapping consistent.
+          if (localPath !== filePath) {
+            fs.copyFileSync(localPath, filePath)
+          }
+          updateJob(id, { progress: 100, status: "downloading" })
+        }
+      } else if (job.url !== "local" && !job.isLocal) {
         console.log("Attempting to fetch video from URL:", job.url)
         const response = await fetch(job.url, {
           headers: {
@@ -97,7 +114,64 @@ export const downloadQueue = Queue(
         updateJob(id, { progress: 100, status: "downloading" })
       }
 
-      if (job.options?.transcribe === false) {
+      let totalDurationSeconds = 0
+
+      // Get duration if we need it for frames or transcription
+      if (captureFramesEnabled || transcribeEnabled) {
+        await new Promise((resolve) => {
+          ffmpeg.ffprobe(filePath, (err, metadata) => {
+            if (err) {
+              console.error("FFprobe error:", err)
+              resolve(true)
+              return
+            }
+            if (metadata.format && metadata.format.duration) {
+              totalDurationSeconds = Number(metadata.format.duration)
+            } else if (metadata.streams && metadata.streams[0] && metadata.streams[0].duration) {
+              totalDurationSeconds = Number(metadata.streams[0].duration)
+            }
+            resolve(true)
+          })
+        })
+      }
+
+      // --- Frame Capture Step ---
+      if (captureFramesEnabled && totalDurationSeconds > 0) {
+        updateJob(id, { status: "capturing_frames", progress: 0 })
+        const framesDir = path.join(downloadsDir, "frames", id)
+        if (!fs.existsSync(framesDir)) {
+          fs.mkdirSync(framesDir, { recursive: true })
+        }
+
+        const count = frameCount
+        const timestamps: number[] = []
+        for (let i = 0; i < count; i++) {
+          timestamps.push((totalDurationSeconds / (count + 1)) * (i + 1))
+        }
+
+        await new Promise((resolve, reject) => {
+          ffmpeg(filePath)
+            .on("error", reject)
+            .on("end", resolve)
+            .screenshots({
+              timestamps,
+              folder: framesDir,
+              filename: "frame-%i.jpg",
+              size: "640x?",
+            })
+        })
+
+        const frames = timestamps.map((ts, i) => ({
+          url: `/downloads/frames/${id}/frame-${i + 1}.jpg`,
+          timestamp: ts,
+        }))
+        updateJob(id, { frames, progress: 100 })
+      } else if (captureFramesEnabled && totalDurationSeconds > 0 && !!job.frames && job.frames.length > 0) {
+        // Skip frame capture if already exists
+        updateJob(id, { progress: 100 })
+      }
+
+      if (!transcribeEnabled) {
         // Finalize with the locally downloaded video, no transcription
         updateJob(id, {
           status: "completed",
@@ -111,8 +185,6 @@ export const downloadQueue = Queue(
       updateJob(id, { status: "converting", progress: 0 })
       const audioFileName = `${id}.raw`
       const audioFilePath = path.join(downloadsDir, audioFileName)
-
-      let totalDurationSeconds = 0
 
       await new Promise((resolve, reject) => {
         let lastReportedProgress = 0
@@ -190,63 +262,74 @@ export const downloadQueue = Queue(
       })
 
       // --- Transcribing Step ---
-      updateJob(id, { status: "transcribing", progress: 0 })
+      if (transcribeEnabled && !job.transcription) {
+        updateJob(id, { status: "transcribing", progress: 0 })
 
-      const { Worker } = await eval("import('node:worker_threads')")
-      const result = await new Promise((resolve, reject) => {
-        const workerScriptPath = path.resolve(
-          process.cwd(),
-          "transcribe-worker.mjs"
-        )
-        const worker = new Worker(workerScriptPath, {
-          workerData: { audioFilePath },
-        })
+        const { Worker } = await eval("import('node:worker_threads')")
+        const result = await new Promise((resolve, reject) => {
+          const workerScriptPath = path.resolve(
+            process.cwd(),
+            "transcribe-worker.mjs"
+          )
+          const worker = new Worker(workerScriptPath, {
+            workerData: { audioFilePath },
+          })
 
-        let stopChecker: NodeJS.Timeout = setInterval(() => {
-          const currentJob = getJob(id)
-          if (currentJob?.status === "stopped") {
-            worker.terminate()
-            clearInterval(stopChecker)
-            reject(new Error("Job forcefully stopped by user during inference"))
-          }
-        }, 1000)
-
-        // To keep the UI state minimal, we will store progress as 0 for loading, 1 for inference.
-        worker.on("message", (msg: any) => {
-          if (msg.type === "status") {
-            if (msg.status === "loading_model") {
-              updateJob(id, { status: "transcribing", progress: 0 })
-            } else if (msg.status === "running_inference") {
-              updateJob(id, { status: "transcribing", progress: 1 })
+          let stopChecker: NodeJS.Timeout = setInterval(() => {
+            const currentJob = getJob(id)
+            if (currentJob?.status === "stopped") {
+              worker.terminate()
+              clearInterval(stopChecker)
+              reject(
+                new Error("Job forcefully stopped by user during inference")
+              )
             }
-          } else if (msg.type === "done") {
+          }, 1000)
+
+          // To keep the UI state minimal, we will store progress as 0 for loading, 1 for inference.
+          worker.on("message", (msg: any) => {
+            if (msg.type === "status") {
+              if (msg.status === "loading_model") {
+                updateJob(id, { status: "transcribing", progress: 0 })
+              } else if (msg.status === "running_inference") {
+                updateJob(id, { status: "transcribing", progress: 1 })
+              }
+            } else if (msg.type === "done") {
+              clearInterval(stopChecker)
+              resolve(msg.result)
+            } else if (msg.type === "error") {
+              clearInterval(stopChecker)
+              reject(new Error(msg.error))
+            }
+          })
+
+          worker.on("error", (err: Error) => {
             clearInterval(stopChecker)
-            resolve(msg.result)
-          } else if (msg.type === "error") {
+            reject(err)
+          })
+
+          worker.on("exit", (code: number) => {
             clearInterval(stopChecker)
-            reject(new Error(msg.error))
-          }
+            if (code !== 0)
+              reject(new Error(`Worker stopped with exit code ${code}`))
+          })
         })
 
-        worker.on("error", (err: Error) => {
-          clearInterval(stopChecker)
-          reject(err)
+        // Finalize with the locally downloaded video, and rich transcription object
+        updateJob(id, {
+          status: "completed",
+          progress: 100,
+          videoUrl: `/downloads/${fileName}`,
+          transcription: result,
         })
-
-        worker.on("exit", (code: number) => {
-          clearInterval(stopChecker)
-          if (code !== 0)
-            reject(new Error(`Worker stopped with exit code ${code}`))
+      } else {
+        // Transcription already exists or not requested, skip to completion
+        updateJob(id, {
+          status: "completed",
+          progress: 100,
+          videoUrl: `/downloads/${fileName}`,
         })
-      })
-
-      // Finalize with the locally downloaded video, and rich transcription object
-      updateJob(id, {
-        status: "completed",
-        progress: 100,
-        videoUrl: `/downloads/${fileName}`,
-        transcription: result,
-      })
+      }
     } catch (error) {
       console.error("Job failed:", error)
       updateJob(id, { status: "error" })

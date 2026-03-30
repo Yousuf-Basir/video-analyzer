@@ -8,6 +8,7 @@ export type JobStatus =
   | "downloading"
   | "converting"
   | "transcribing"
+  | "capturing_frames"
   | "completed"
   | "error"
   | "stopped"
@@ -15,6 +16,8 @@ export type JobStatus =
 export interface JobOptions {
   checkExisting?: boolean
   transcribe?: boolean
+  captureFrames?: boolean
+  frameCount?: number
 }
 
 export interface Job {
@@ -27,6 +30,7 @@ export interface Job {
   audioUrl?: string
   thumbnailUrl?: string
   transcription?: any
+  frames?: { url: string; timestamp: number }[]
   options?: JobOptions
 }
 
