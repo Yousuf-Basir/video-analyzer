@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
-import { createJob } from "@/lib/db"
+import { createJob, getJob } from "@/lib/db"
 import { downloadQueue } from "@/app/api/queues/download/route"
-import { v4 as uuidv4 } from "uuid"
+import crypto from "crypto"
 
 export async function POST(req: NextRequest) {
   const { url } = await req.json()
@@ -10,7 +10,14 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "No URL provided" }, { status: 400 })
   }
 
-  const id = uuidv4()
+  // Use a stable ID based on the URL hash to prevent global duplicate IDs/downloads
+  const id = crypto.createHash("sha256").update(url).digest("hex").slice(0, 16)
+
+  const existingJob = getJob(id);
+  // Short-circuit if the job is already completed
+  if (existingJob && existingJob.status === "completed") {
+    return NextResponse.json({ id });
+  }
 
   createJob({
     id,

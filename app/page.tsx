@@ -13,6 +13,7 @@ type JobState = {
     | "downloading"
     | "converting"
     | "transcribing"
+    | "analyzing"
     | "completed"
     | "error"
     | "stopped"
@@ -21,6 +22,13 @@ type JobState = {
   audioUrl?: string
   thumbnailUrl?: string
   transcription?: any
+  visualAnalysis?: any
+  textAnalysis?: any
+  evaluation?: {
+    confidence: number
+    professionalism: number
+    summary: string
+  }
 }
 
 export default function Page() {
@@ -64,7 +72,7 @@ export default function Page() {
     let interval: NodeJS.Timeout
     if (
       job &&
-      ["pending", "downloading", "converting", "transcribing"].includes(
+      ["pending", "downloading", "converting", "transcribing", "analyzing"].includes(
         job.status
       )
     ) {
@@ -239,7 +247,7 @@ export default function Page() {
 
         {/* Unified Pipeline UI */}
         {job &&
-          ["pending", "downloading", "converting", "transcribing"].includes(
+          ["pending", "downloading", "converting", "transcribing", "analyzing"].includes(
             job.status
           ) && (
             <div className="mx-auto flex w-full max-w-md animate-in flex-col gap-6 rounded-xl border bg-card p-6 shadow-sm duration-300 fade-in zoom-in">
@@ -370,6 +378,41 @@ export default function Page() {
                     )}
                   </div>
                 </div>
+
+                {/* Analyzing Step */}
+                <div
+                  className={`flex items-start gap-4 transition-opacity ${["pending", "downloading", "converting", "transcribing"].includes(job.status) ? "opacity-40" : "opacity-100"}`}
+                >
+                  <div className="mt-1">
+                    {["pending", "downloading", "converting", "transcribing"].includes(
+                      job.status
+                    ) ? (
+                      <Circle className="h-5 w-5 text-muted-foreground" />
+                    ) : job.status === "analyzing" ? (
+                      <Loader2 className="h-5 w-5 animate-spin text-primary" />
+                    ) : (
+                      <CheckCircle2 className="h-5 w-5 text-green-500" />
+                    )}
+                  </div>
+                  <div className="flex flex-1 flex-col gap-2">
+                    <div className="flex items-center justify-between text-sm font-semibold">
+                      <span>Multi-modal AI Analysis</span>
+                      <span className="text-muted-foreground">
+                        {job.status === "analyzing" && "Running..."}
+                      </span>
+                    </div>
+                    {job.status === "analyzing" && (
+                      <>
+                        <div className="h-2 w-full overflow-hidden rounded-full bg-secondary">
+                          <div className="animate-indeterminate h-full rounded-full bg-primary/70" />
+                        </div>
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          Detecting confidence, tone, and professionalism levels...
+                        </p>
+                      </>
+                    )}
+                  </div>
+                </div>
               </div>
             </div>
           )}
@@ -388,6 +431,52 @@ export default function Page() {
                     className="aspect-video w-full object-cover"
                   />
                 </div>
+
+                {/* Evaluation Metrics */}
+                {job.evaluation && (
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    <div className="flex flex-col gap-3 rounded-xl border bg-card p-5 shadow-sm">
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm font-medium text-muted-foreground">
+                          Confidence
+                        </span>
+                        <span className="text-lg font-bold">
+                          {job.evaluation.confidence}%
+                        </span>
+                      </div>
+                      <div className="h-2 w-full overflow-hidden rounded-full bg-secondary">
+                        <div
+                          className="h-full bg-blue-500 transition-all duration-1000"
+                          style={{ width: `${job.evaluation.confidence}%` }}
+                        />
+                      </div>
+                    </div>
+                    <div className="flex flex-col gap-3 rounded-xl border bg-card p-5 shadow-sm">
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm font-medium text-muted-foreground">
+                          Professionalism
+                        </span>
+                        <span className="text-lg font-bold">
+                          {job.evaluation.professionalism}%
+                        </span>
+                      </div>
+                      <div className="h-2 w-full overflow-hidden rounded-full bg-secondary">
+                        <div
+                          className="h-full bg-green-500 transition-all duration-1000"
+                          style={{ width: `${job.evaluation.professionalism}%` }}
+                        />
+                      </div>
+                    </div>
+                    <div className="col-span-full flex flex-col gap-3 rounded-xl border bg-primary/5 p-5 shadow-sm">
+                      <h4 className="text-sm font-semibold uppercase tracking-wider text-primary">
+                        AI Candidate Summary
+                      </h4>
+                      <p className="text-sm leading-relaxed text-foreground">
+                        {job.evaluation.summary}
+                      </p>
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Transcription */}
@@ -433,6 +522,79 @@ export default function Page() {
                   )}
                 </div>
               </div>
+              {/* Model Evidence / Insights */}
+              {job.visualAnalysis?.frames && (
+                <div className="flex w-full flex-col gap-4 rounded-2xl border bg-card p-6 shadow-md">
+                  <h3 className="border-b pb-3 text-xl font-bold flex items-center gap-3">
+                    <CheckCircle2 className="h-6 w-6 text-primary" />
+                    Model Insights & Evidence
+                  </h3>
+                  
+                  <div className="flex flex-col gap-8">
+                    <div>
+                      <h4 className="mb-4 text-xs font-bold text-primary uppercase tracking-widest">Visual Evidence (Key Moments)</h4>
+                      <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
+                        {job.visualAnalysis.frames.map((frame: any, idx: number) => {
+                          const topEmotion = frame.emotions.reduce((prev: any, current: any) => (prev.score > current.score) ? prev : current);
+                          const profScore = Math.round((frame.professionalism.find((l: any) => l.label.includes("professional"))?.score || 0) * 100);
+                          
+                          return (
+                            <div key={idx} className="flex flex-col gap-3 rounded-xl border bg-muted/20 p-4 transition-all hover:bg-muted/30">
+                              <div className="relative aspect-video w-full overflow-hidden rounded-lg">
+                                <img 
+                                  src={`/downloads/frames/${job.id}/${frame.filename}`} 
+                                  alt={`Frame ${idx}`}
+                                  className="h-full w-full object-cover transition-transform duration-500 hover:scale-110"
+                                />
+                                <div className="absolute top-2 left-2 rounded bg-black/60 px-2 py-1 text-[10px] font-mono text-white">
+                                  Snapshot {idx + 1}
+                                </div>
+                              </div>
+                              <div className="flex flex-col gap-2">
+                                <div className="flex flex-col gap-1 text-[10px]">
+                                  <span className="text-muted-foreground font-bold uppercase tracking-tight">Visual Impression:</span>
+                                  <span className="font-bold leading-tight text-primary">
+                                    {topEmotion.label.replace("a person ", "")}
+                                  </span>
+                                </div>
+                                <div className="flex items-center justify-between border-t border-muted pt-2 text-xs">
+                                  <span className="text-muted-foreground font-medium">Professionalism</span>
+                                  <span className="font-bold text-foreground">{profScore}%</span>
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {job.textAnalysis && (
+                      <div className="border-t pt-6">
+                        <h4 className="mb-4 text-xs font-bold text-primary uppercase tracking-widest">Verbal Style Score Breakdown</h4>
+                        <div className="flex flex-col gap-4">
+                          {job.textAnalysis.labels.map((label: string, idx: number) => {
+                            const score = Math.round(job.textAnalysis.scores[idx] * 100);
+                            return (
+                              <div key={label} className="flex flex-col gap-2">
+                                <div className="flex items-center justify-between px-1">
+                                  <span className="text-sm font-semibold capitalize text-foreground">{label}</span>
+                                  <span className="font-mono text-sm font-bold text-primary">{score}%</span>
+                                </div>
+                                <div className="h-2 w-full overflow-hidden rounded-full bg-secondary">
+                                  <div 
+                                    className="h-full bg-primary transition-all duration-1000"
+                                    style={{ width: `${score}%` }}
+                                  />
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
 
             <Button

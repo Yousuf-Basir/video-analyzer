@@ -8,6 +8,7 @@ export type JobStatus =
   | "downloading"
   | "converting"
   | "transcribing"
+  | "analyzing"
   | "completed"
   | "error"
   | "stopped"
@@ -22,6 +23,13 @@ export interface Job {
   audioUrl?: string
   thumbnailUrl?: string
   transcription?: any
+  visualAnalysis?: any
+  textAnalysis?: any
+  evaluation?: {
+    confidence: number
+    professionalism: number
+    summary: string
+  }
 }
 
 export function getJobs(): Record<string, Job> {
