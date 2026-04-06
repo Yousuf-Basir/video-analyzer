@@ -32,6 +32,8 @@ export async function POST(req: NextRequest) {
       ? parseInt(frameCountParam)
       : bodyOptions?.frameCount || 5
 
+  const analyzeExpressions = bodyOptions?.analyzeExpressions === true
+  
   if (!url) {
     return NextResponse.json({ error: "No URL provided" }, { status: 400 })
   }
@@ -41,9 +43,12 @@ export async function POST(req: NextRequest) {
     const existingJob = findJobByUrl(url)
     if (existingJob) {
       const hasTranscription = !!existingJob.transcription
-      const hasFrames = !!existingJob.frames && existingJob.frames.length > 0
+      const hasFrames = !!existingJob.frames && existingJob.frames.length > 0 &&
+                        (!captureFrames || existingJob.frames.length === frameCount) &&
+                        // If they want analysis, make sure all frames are analyzed, OR if they changed analyzeExpressions
+                        (analyzeExpressions === !!existingJob.options?.analyzeExpressions)
 
-      // If existing job has everything we need, return its ID
+      // If existing job has everything we need exactly, return its ID
       if (
         (!transcribe || hasTranscription) &&
         (!captureFrames || hasFrames)
@@ -61,6 +66,7 @@ export async function POST(req: NextRequest) {
           transcribe,
           captureFrames,
           frameCount,
+          analyzeExpressions,
         },
       })
       await downloadQueue.enqueue({ id: existingJob.id })
@@ -80,6 +86,7 @@ export async function POST(req: NextRequest) {
       transcribe,
       captureFrames,
       frameCount,
+      analyzeExpressions,
     },
   })
 

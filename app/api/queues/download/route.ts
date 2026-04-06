@@ -135,40 +135,82 @@ export const downloadQueue = Queue(
         })
       }
 
+      let finalFrames: any[] = []
+
       // --- Frame Capture Step ---
       if (captureFramesEnabled && totalDurationSeconds > 0) {
-        updateJob(id, { status: "capturing_frames", progress: 0 })
-        const framesDir = path.join(downloadsDir, "frames", id)
-        if (!fs.existsSync(framesDir)) {
-          fs.mkdirSync(framesDir, { recursive: true })
-        }
-
         const count = frameCount
-        const timestamps: number[] = []
-        for (let i = 0; i < count; i++) {
-          timestamps.push((totalDurationSeconds / (count + 1)) * (i + 1))
+        // If frames don't exist yet, or the requested count has changed, capture them
+        if (!job.frames || job.frames.length === 0 || job.frames.length !== count) {
+          updateJob(id, { status: "capturing_frames", progress: 0 })
+          const framesDir = path.join(downloadsDir, "frames", id)
+          if (!fs.existsSync(framesDir)) {
+            fs.mkdirSync(framesDir, { recursive: true })
+          }
+
+          const count = frameCount
+          const timestamps: number[] = []
+          for (let i = 0; i < count; i++) {
+            timestamps.push((totalDurationSeconds / (count + 1)) * (i + 1))
+          }
+
+          await new Promise((resolve, reject) => {
+            ffmpeg(filePath)
+              .on("error", reject)
+              .on("end", resolve)
+              .screenshots({
+                timestamps,
+                folder: framesDir,
+                filename: "frame-%i.jpg",
+                size: "640x?",
+              })
+          })
+
+          const oldFrames = job.frames || []
+          finalFrames = timestamps.map((ts, i) => ({
+            url: `/downloads/frames/${id}/frame-${i + 1}.jpg`,
+            timestamp: ts,
+            analysis: oldFrames[i] ? oldFrames[i].analysis : undefined
+          }))
+          updateJob(id, { frames: finalFrames, progress: 100 })
+        } else {
+          // Skip frame capture if already exists
+          finalFrames = [...job.frames]
+          updateJob(id, { progress: 100 })
         }
 
-        await new Promise((resolve, reject) => {
-          ffmpeg(filePath)
-            .on("error", reject)
-            .on("end", resolve)
-            .screenshots({
-              timestamps,
-              folder: framesDir,
-              filename: "frame-%i.jpg",
-              size: "640x?",
-            })
-        })
-
-        const frames = timestamps.map((ts, i) => ({
-          url: `/downloads/frames/${id}/frame-${i + 1}.jpg`,
-          timestamp: ts,
-        }))
-        updateJob(id, { frames, progress: 100 })
-      } else if (captureFramesEnabled && totalDurationSeconds > 0 && !!job.frames && job.frames.length > 0) {
-        // Skip frame capture if already exists
-        updateJob(id, { progress: 100 })
+        // --- Expression Analysis Step ---
+        if (job.options?.analyzeExpressions === true) {
+           const { fork } = await eval("import('child_process')")
+           const workerScriptPath = path.resolve(process.cwd(), "expression-worker.mjs")
+           
+           for (let i = 0; i < finalFrames.length; i++) {
+              const imageFilePath = path.join(process.cwd(), "public", finalFrames[i].url)
+              try {
+                const result = await new Promise((resolve, reject) => {
+                  const child = fork(workerScriptPath, [imageFilePath])
+                  child.on("message", (msg: any) => { 
+                    if(msg.type === "done") {
+                      resolve(msg.result)
+                    }
+                    if(msg.type === "error") {
+                      reject(new Error(msg.error)) 
+                    }
+                  })
+                  child.on("error", (err: any) => {
+                    reject(err)
+                  })
+                  child.on("exit", (code: number) => { 
+                    if(code !== 0 && code !== null) reject(new Error(`Worker stopped with code ${code}`)) 
+                  })
+                })
+                finalFrames[i].analysis = result
+              } catch (e) {
+                console.error("Frame analysis failed during pipeline for frame", i, e)
+              }
+           }
+           updateJob(id, { frames: finalFrames })
+        }
       }
 
       if (!transcribeEnabled) {

@@ -26,6 +26,10 @@ async function run() {
     });
 
     parentPort.postMessage({ type: 'done', result });
+
+    if (transcriber.dispose) {
+        await transcriber.dispose();
+    }
 }
 
 run().catch(err => {

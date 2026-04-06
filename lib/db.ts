@@ -18,6 +18,8 @@ export interface JobOptions {
   transcribe?: boolean
   captureFrames?: boolean
   frameCount?: number
+  analyzeExpressions?: boolean
+  rerunExpressions?: boolean
 }
 
 export interface Job {
@@ -30,7 +32,7 @@ export interface Job {
   audioUrl?: string
   thumbnailUrl?: string
   transcription?: any
-  frames?: { url: string; timestamp: number }[]
+  frames?: { url: string; timestamp: number; analysis?: any }[]
   options?: JobOptions
 }
 
@@ -69,6 +71,14 @@ export function createJob(job: Job) {
   const jobs = getJobs()
   jobs[job.id] = job
   saveJobs(jobs)
+}
+
+export function deleteJob(id: string) {
+  const jobs = getJobs()
+  if (jobs[id]) {
+    delete jobs[id]
+    saveJobs(jobs)
+  }
 }
 
 export function findJobByUrl(url: string): Job | undefined {
