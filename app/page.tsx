@@ -53,6 +53,7 @@ export default function Page() {
     if (file) {
       const formData = new FormData()
       formData.append("file", file)
+      formData.append("options", JSON.stringify(options))
       res = await fetch("/api/upload", {
         method: "POST",
         body: formData,

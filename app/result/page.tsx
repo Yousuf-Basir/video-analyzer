@@ -25,6 +25,7 @@ type JobState = {
   thumbnailUrl?: string
   transcription?: any
   frames?: { url: string; timestamp: number; analysis?: any }[]
+  overallScore?: number
 }
 
 export default function ResultPage() {
@@ -379,6 +380,20 @@ export default function ResultPage() {
         {/* Player & Output UI */}
         {job && job.status === "completed" && job.videoUrl && (
           <div className="flex w-full animate-in flex-col gap-6 duration-500 fade-in zoom-in">
+            {job.overallScore !== undefined && (
+              <div className="flex justify-between items-center bg-card rounded-xl border p-6 shadow-sm">
+                <div>
+                  <h2 className="text-xl font-bold">Applicant Professionalism Score</h2>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    Calculated by averaging the weighted expression analysis across all selected frames.
+                  </p>
+                </div>
+                <div className="text-4xl font-extrabold text-primary">
+                  {job.overallScore}%
+                </div>
+              </div>
+            )}
+            
             <div className="flex w-full flex-col gap-6">
               {/* Media */}
               <div className="flex w-full flex-col gap-4">

@@ -9,6 +9,14 @@ export async function POST(req: NextRequest) {
   try {
     const formData = await req.formData()
     const file = formData.get("file") as File
+    const optionsRaw = formData.get("options") as string
+    const options = optionsRaw ? JSON.parse(optionsRaw) : {
+      checkExisting: true,
+      transcribe: true,
+      captureFrames: true,
+      frameCount: 5,
+      analyzeExpressions: true,
+    }
 
     if (!file) {
       return NextResponse.json({ error: "No file provided" }, { status: 400 })
@@ -33,6 +41,7 @@ export async function POST(req: NextRequest) {
       isLocal: true,
       status: "pending",
       progress: 0,
+      options
     })
 
     await downloadQueue.enqueue({ id })

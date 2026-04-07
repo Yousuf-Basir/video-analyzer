@@ -33,6 +33,7 @@ export interface Job {
   thumbnailUrl?: string
   transcription?: any
   frames?: { url: string; timestamp: number; analysis?: any }[]
+  overallScore?: number
   options?: JobOptions
 }
 
@@ -62,9 +63,46 @@ export function updateJob(id: string, updates: Partial<Job>) {
     if (jobs[id].status === "stopped" && updates.status !== "stopped") {
       return
     }
-    jobs[id] = { ...jobs[id], ...updates }
+    
+    let overallScore = jobs[id].overallScore
+    if (updates.frames !== undefined) {
+      overallScore = calculateOverallScore(updates.frames)
+    }
+
+    jobs[id] = { ...jobs[id], ...updates, overallScore }
     saveJobs(jobs)
   }
+}
+
+function calculateOverallScore(frames: any[]) {
+  if (!frames || !Array.isArray(frames) || frames.length === 0) return undefined
+  let totalScore = 0
+  let validFramesCount = 0
+
+  for (const frame of frames) {
+    if (!frame.analysis || !Array.isArray(frame.analysis)) continue
+    validFramesCount++
+    
+    let frameScore = 0
+    for (const item of frame.analysis) {
+      const label = item.label || ""
+      const score = item.score || 0
+      
+      if (label.includes("confident")) {
+        frameScore += score * 100
+      } else if (label.includes("naturally") || label.includes("relaxed") || label.includes("neutral")) {
+        frameScore += score * 70
+      } else if (label.includes("anxious") || label.includes("nervous")) {
+        frameScore += score * 20
+      } else if (label.includes("distracted") || label.includes("unprofessional")) {
+        frameScore += score * 0
+      }
+    }
+    totalScore += frameScore
+  }
+  
+  if (validFramesCount === 0) return undefined
+  return Math.round(totalScore / validFramesCount)
 }
 
 export function createJob(job: Job) {
